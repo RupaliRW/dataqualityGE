@@ -18,6 +18,7 @@ git branch: 'main', url: 'https://github.com/RupaliRW/dataqualityGE.git'
 stage('Install Dependencies') {
 steps {
 sh '''
+python3 -m pip install --upgrade pip setuptools wheel
 python3 -m venv venv
 . venv/bin/activate
 pip install -r requirements.txt
