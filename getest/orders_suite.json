@@ -1,0 +1,38 @@
+{
+"expectation_suite_name": "orders_suite",
+"data_asset_type": "SparkDFDataset",
+"meta": {
+"owner": "QA-Team",
+"dataset": "orders",
+"description": "DQ rules including edge cases"
+},
+"expectations": [
+{
+"expectation_type": "expect_column_values_to_not_be_null",
+"kwargs": { "column": "order_id" }
+},
+{
+"expectation_type": "expect_column_values_to_be_unique",
+"kwargs": { "column": "order_id" }
+},
+{
+"expectation_type": "expect_column_values_to_not_be_null",
+"kwargs": { "column": "amount" }
+},
+{
+"expectation_type": "expect_column_values_to_be_between",
+"kwargs": {
+"column": "amount",
+"min_value": 0,
+"strictly": true
+}
+},
+{
+"expectation_type": "expect_column_values_to_be_in_set",
+"kwargs": {
+"column": "status",
+"value_set": ["COMPLETED", "PENDING", "CANCELLED"]
+}
+}
+]
+}

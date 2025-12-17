@@ -45,16 +45,19 @@ for result in validation_result["results"]:
 
 
         valid_df = df_indexed.filter(
-        ~df_indexed.row_id.isin(failed_ids)
+        df_indexed.row_id.isin(failed_ids)
         ).drop("row_id")
 
 
         valid_df.write.mode("overwrite").parquet("/tmp/ukus18novtmp/rupali/orders_valid/")
+        valid_df.show(5)
         quarantine_df.write.mode("append").parquet("/tmp/ukus18novtmp/rupali/orders_quarantine/")
+        quarantine_df.show(5)
 
 
         total = df.count()
         bad = quarantine_df.count()
+        print (str(total) + " valid and invalid records are" + str(bad))
 
 if total > 0 and bad / total > 0.05:
     raise Exception("Quarantine threshold exceeded")
