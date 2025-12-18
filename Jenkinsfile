@@ -20,7 +20,7 @@ steps {
 sh '''
 which -a python
 which -a python3
-which -a python3.*
+which -a python3.10
 python3 -m pip install --upgrade pip setuptools wheel
 python3 -m venv venv
 . venv/bin/activate
