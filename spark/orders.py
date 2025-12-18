@@ -1,7 +1,10 @@
 from pyspark.sql import SparkSession
 from pyspark.sql.window import Window
 from pyspark.sql.functions import row_number, lit
-import great_expectations as ge
+
+from great_expectations.validator.validator import Validator
+from great_expectations.execution_engine import SparkDFExecutionEngine
+from great_expectations.core.expectation_suite import ExpectationSuite
 
 
 # Spark session
@@ -16,26 +19,40 @@ df = (
 )
 
 
-# Add row_id (stable indexing)
+# Add stable row_id
 
 window = Window.orderBy(lit(1))
+df_indexed = df.withColumn("row_id", row_number().over(window) - 1)
 
-df_indexed = (
-    df.withColumn("row_id", row_number().over(window) - 1)
+
+# Create Expectation Suite
+
+suite = ExpectationSuite(expectation_suite_name="orders_suite")
+
+
+# Create Spark Execution Engine
+
+engine = SparkDFExecutionEngine(spark=spark)
+
+
+# Create Validator (THIS IS THE KEY)
+
+validator = Validator(
+    execution_engine=engine,
+    expectation_suite=suite,
+    batch_data=df_indexed
 )
 
 
-# Great Expectations (NO context / NO sources)
+# Define expectations
 
-validator = ge.validator(
-    execution_engine="SparkDFExecutionEngine",
-    batch_data=df_indexed,
-    expectation_suite_name="orders_suite"
+validator.expect_column_values_to_not_be_null("order_id")
+
+validator.expect_column_values_to_be_between(
+    "amount",
+    min_value=0,
+    strictly=True
 )
-
-# Example expectations (must exist or be defined here)
-# validator.expect_column_values_to_not_be_null("order_id")
-# validator.expect_column_values_to_be_between("amount", min_value=0, strictly=True)
 
 
 # Run validation
@@ -49,8 +66,9 @@ failed_indices = set()
 
 for result in validation_result["results"]:
     if not result["success"]:
-        unexpected_rows = result["result"].get("unexpected_index_list", [])
-        failed_indices.update(unexpected_rows)
+        failed_indices.update(
+            result["result"].get("unexpected_index_list", [])
+        )
 
 failed_ids = list(failed_indices)
 
@@ -84,7 +102,7 @@ valid_df.show(5)
 quarantine_df.show(5)
 
 
-# Metrics & threshold
+# Metrics & SLA threshold
 
 total = df.count()
 bad = quarantine_df.count()
