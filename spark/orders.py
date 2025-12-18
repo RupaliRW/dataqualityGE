@@ -1,134 +1,74 @@
+import pytest
 from pyspark.sql import SparkSession
-from pyspark.sql.window import Window
-from pyspark.sql.functions import row_number, lit
-import great_expectations as ge
+from pyspark.sql.functions import col, to_date
+
+# -----------------------------
+# Spark fixture (session scope)
+# -----------------------------
+
+@pytest.fixture(scope="session")
+def spark():
+    spark = (
+        SparkSession.builder
+        .appName("pytest-orders")
+        .master("local[2]")
+        .getOrCreate()
+    )
+    yield spark
+    spark.stop()
+
+# -----------------------------
+# Load orders data
+# -----------------------------
+
+@pytest.fixture(scope="session")
+def orders_df(spark):
+    return (
+        spark.read
+        .option("header", True)
+        .option("inferSchema", True)
+        .csv("data/orders.csv")
+    )
+
+# -----------------------------
+# Tests
+# -----------------------------
+
+def test_order_id_not_null(orders_df):
+    assert orders_df.filter(col("order_id").isNull()).count() == 0
 
 
-# Spark session
-spark = (
-    SparkSession.builder
-    .appName("Orders-Quarantine")
-    .getOrCreate()
-)
+def test_order_date_is_valid(orders_df):
+    invalid_dates = orders_df.withColumn(
+        "order_date_parsed",
+        to_date(col("order_date"))
+    ).filter(col("order_date_parsed").isNull())
 
-df = (
-    spark.read
-    .option("header", True)
-    .option("inferSchema", True)
-    .csv("data/orders.csv")
-)
+    assert invalid_dates.count() == 0
 
 
-# Add stable row_id (required)
+def test_amount_positive_for_completed_orders(orders_df):
+    invalid_amounts = orders_df.filter(
+        (col("status") == "COMPLETED") & (col("amount") <= 0)
+    )
+
+    assert invalid_amounts.count() == 0
 
 
-window = Window.orderBy(lit(1))
-df_indexed = df.withColumn("row_id", row_number().over(window) - 1)
+def test_status_allowed_values(orders_df):
+    allowed = ["COMPLETED", "PENDING", "CANCELLED"]
+
+    invalid_status = orders_df.filter(
+        ~col("status").isin(allowed)
+    )
+
+    assert invalid_status.count() == 0
 
 
-# Load GE Context (1.9.3)
+def test_detect_bad_rows(orders_df):
+    bad_rows = orders_df.filter(
+        col("amount").isNull() | (col("amount") < 0)
+    )
 
-
-context = ge.get_context()
-
-
-# Register Spark datasource
-
-
-datasource_name = "spark_ds"
-
-if datasource_name not in [ds["name"] for ds in context.list_datasources()]:
-    context.sources.add_or_update_spark(name=datasource_name)
-
-
-# Create DataFrame Asset + BatchRequest
-
-
-asset = context.sources[spark_ds].add_dataframe_asset(
-    name="orders_asset"
-)
-
-batch_request = asset.build_batch_request(
-    dataframe=df_indexed
-)
-
-
-# Create Expectation Suite (if missing)
-
-
-suite_name = "orders_suite"
-
-if suite_name not in context.list_expectation_suite_names():
-    context.add_expectation_suite(suite_name)
-
-
-# Get Validator (CORRECT API)
-
-
-validator = context.get_validator(
-    batch_request=batch_request,
-    expectation_suite_name=suite_name
-)
-
-
-# Expectations
-
-
-validator.expect_column_values_to_not_be_null(
-    "order_id",
-    result_format="COMPLETE"
-)
-
-validator.expect_column_values_to_be_between(
-    "amount",
-    min_value=0,
-    strictly=True,
-    result_format="COMPLETE"
-)
-
-
-# Validate
-
-
-results = validator.validate()
-
-validator.save_expectation_suite()
-
-
-# Collect failed row_ids
-
-
-failed_ids = set()
-
-for r in results["results"]:
-    idx = r["result"].get("unexpected_index_list")
-    if idx:
-        failed_ids.update(idx)
-
-
-# Split data
-
-
-quarantine_df = (
-    df_indexed
-    .filter(df_indexed.row_id.isin(list(failed_ids)))
-    .drop("row_id")
-)
-
-valid_df = (
-    df_indexed
-    .filter(~df_indexed.row_id.isin(list(failed_ids)))
-    .drop("row_id")
-)
-
-
-# Write outputs
-
-
-valid_df.write.mode("overwrite").parquet("output/valid/")
-quarantine_df.write.mode("overwrite").parquet("output/quarantine/")
-
-print(
-    f"Total: {df.count()}, "
-    f"Quarantined: {quarantine_df.count()}"
-)
+    # From sample data: order_id 3 (null amount), order_id 4 (negative)
+    assert bad_rows.count() == 2
