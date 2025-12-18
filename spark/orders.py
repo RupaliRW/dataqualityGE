@@ -4,60 +4,95 @@ from pyspark.sql.functions import row_number, lit
 import great_expectations as ge
 
 
+# Spark session
+
 spark = SparkSession.builder.appName("Orders-Quarantine").getOrCreate()
 
-
-df = spark.read.option("header", True).option("inferSchema", True).csv("data/orders.csv")
-
-
-ge_df = ge.dataset.SparkDFDataset(df)
-
-validation_result = ge_df.validate(
-expectation_suite="getest/orders_suite.json",
-result_format="COMPLETE"
+df = (
+    spark.read
+    .option("header", True)
+    .option("inferSchema", True)
+    .csv("data/orders.csv")
 )
 
 
-failed_indices = set()
+# Add row_id (stable indexing)
 
+window = Window.orderBy(lit(1))
+
+df_indexed = (
+    df.withColumn("row_id", row_number().over(window) - 1)
+)
+
+
+# Great Expectations Context
+
+context = ge.get_context()
+
+context.sources.add_or_update_spark(
+    name="spark_ds"
+)
+
+validator = context.sources.get("spark_ds").get_validator(
+    batch_data=df_indexed,
+    expectation_suite_name="orders_suite"
+)
+
+
+# Run validation
+
+validation_result = validator.validate(
+    result_format="COMPLETE"
+)
+
+
+# Collect failed row_ids
+
+failed_indices = set()
 
 for result in validation_result["results"]:
     if not result["success"]:
-        unexpected = result["result"].get("unexpected_index_list", [])
-        failed_indices.update(unexpected)
+        unexpected_rows = result["result"].get("unexpected_index_list", [])
+        failed_indices.update(unexpected_rows)
+
+failed_ids = list(failed_indices)
 
 
-        window = Window.orderBy(lit(1))
+# Split quarantine vs valid
+
+quarantine_df = (
+    df_indexed
+    .filter(df_indexed.row_id.isin(failed_ids))
+    .drop("row_id")
+)
+
+valid_df = (
+    df_indexed
+    .filter(~df_indexed.row_id.isin(failed_ids))
+    .drop("row_id")
+)
 
 
-        df_indexed = df.withColumn(
-        "row_id",
-        row_number().over(window) - 1
-        )
+# Write outputs
+
+valid_df.write.mode("overwrite").parquet(
+    "/tmp/ukus18novtmp/rupali/orders_valid/"
+)
+
+quarantine_df.write.mode("append").parquet(
+    "/tmp/ukus18novtmp/rupali/orders_quarantine/"
+)
+
+valid_df.show(5)
+quarantine_df.show(5)
 
 
-        failed_ids = list(failed_indices)
+# Metrics & threshold
 
+total = df.count()
+bad = quarantine_df.count()
 
-        quarantine_df = df_indexed.filter(
-        df_indexed.row_id.isin(failed_ids)
-        ).drop("row_id")
-
-
-        valid_df = df_indexed.filter(
-        df_indexed.row_id.isin(failed_ids)
-        ).drop("row_id")
-
-
-        valid_df.write.mode("overwrite").parquet("/tmp/ukus18novtmp/rupali/orders_valid/")
-        valid_df.show(5)
-        quarantine_df.write.mode("append").parquet("/tmp/ukus18novtmp/rupali/orders_quarantine/")
-        quarantine_df.show(5)
-
-
-        total = df.count()
-        bad = quarantine_df.count()
-        print (str(total) + " valid and invalid records are" + str(bad))
+print(f"Total records: {total}, Quarantined: {bad}")
 
 if total > 0 and bad / total > 0.05:
     raise Exception("Quarantine threshold exceeded")
