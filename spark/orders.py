@@ -25,25 +25,22 @@ df_indexed = (
 )
 
 
-# Great Expectations Context
+# Great Expectations (NO context / NO sources)
 
-context = ge.get_context()
-
-context.sources.add_or_update_spark(
-    name="spark_ds"
-)
-
-validator = context.sources.get("spark_ds").get_validator(
+validator = ge.validator(
+    execution_engine="SparkDFExecutionEngine",
     batch_data=df_indexed,
     expectation_suite_name="orders_suite"
 )
 
+# Example expectations (must exist or be defined here)
+# validator.expect_column_values_to_not_be_null("order_id")
+# validator.expect_column_values_to_be_between("amount", min_value=0, strictly=True)
+
 
 # Run validation
 
-validation_result = validator.validate(
-    result_format="COMPLETE"
-)
+validation_result = validator.validate(result_format="COMPLETE")
 
 
 # Collect failed row_ids
