@@ -35,13 +35,14 @@ def orders_df(spark):
 # Add deterministic row_id
 
 
+
 @pytest.fixture(scope="session")
 def orders_with_id(orders_df):
-    window = Window.orderBy(lit(1))
     return orders_df.withColumn(
         "row_id",
-        row_number().over(window)
+        col("order_id")
     )
+
 
 
 # DQ rules (row-level)
